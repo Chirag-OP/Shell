@@ -1,3 +1,6 @@
 loop
 *.o
 build/
+test.cpp
+test
+spare.txt
