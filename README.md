@@ -1,3 +1,23 @@
+# My shell
+A simple Unix shell implemented in C++ to understand how shells work internally, including process creation, command execution, pipes, I/O redirection, and basic shell built-ins
+
+## Status
+**currently building**
+
+## Features
+
+### Implemented
+- Built-in Commands
+- External Commands 
+- Output Redirection
+- Quotes Parsing
+- Pipes
+
+### Planned
+- Command History
+- Jobs
+- KeyBoard Interrupts
+
 ## Design Decisions
 ### Why use `std::string` and `std::vector<std::string>` in the `Command` struct?
 
