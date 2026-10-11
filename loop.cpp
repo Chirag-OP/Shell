@@ -7,12 +7,33 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include<sys/wait.h>
+#include<signal.h>
+#include<cerrno>
 using namespace std;
 // >>> resets the redirection instead of error- so need to handle this
 // implement redirection in ls and pwd also 
 // make the mkdir command work on multiple files
 // make parser also parse ""    - done 
 // update parser for pipes  - done 
+
+// int startingID = 1;
+// struct backgroundChildren{
+//     int id;
+//     int pid;
+// };
+
+volatile sig_atomic_t childChanged = 0;
+
+void reapChild(){
+    if(childChanged){
+        childChanged = 0;
+        int status;
+        int pid;
+        while((pid = waitpid(-1,&status,WNOHANG))>0){
+            cout<<"Child "<<pid<<' '<<"completed"<<endl;
+        }
+    }
+}
 struct Command{
     string name;
     vector<string>args;
@@ -21,6 +42,7 @@ struct Command{
 };
 struct Pipeline{
     vector<Command>commands;
+    bool background = false;
 };
 void pwd(){
     char *c = getcwd(nullptr,0);
@@ -76,6 +98,7 @@ void removedir(Command &token){
 void callOuterCommands( Pipeline &pipeline){
     int lastPipeRead = -1;
     vector<pid_t>chilren_pids;
+    bool background = pipeline.background;
     for(int i=0;i<pipeline.commands.size();i++){
         int fd[2];
         if(i!=pipeline.commands.size()-1){
@@ -149,7 +172,7 @@ void callOuterCommands( Pipeline &pipeline){
             }
             else{
                 if(lastPipeRead!=-1)close(lastPipeRead);
-                for(auto &c:chilren_pids) waitpid(c,nullptr,0);
+                if(!background) for(auto &c:chilren_pids) waitpid(c,nullptr,0);
             }
         }
         else perror("fork");
@@ -172,7 +195,7 @@ void inputParser(string input){
     Pipeline pipeline;
     for(int i=0;i<input.size();i++){
         char s = input[i];
-        if(s==' ' || s=='>' || s=='\'' || s=='"' || s=='|'){
+        if(s==' ' || s=='>' || s=='\'' || s=='"' || s=='|' || s=='&'){
             if(!ele.empty()){
                 if(token.name.empty()) token.name=ele;
                 else{
@@ -234,6 +257,7 @@ void inputParser(string input){
                 }
                 else mode++;
             }
+            else if(s=='&') pipeline.background = true;
         }
         else ele+=s;
     }
@@ -251,20 +275,60 @@ void inputParser(string input){
     }
     // call operations
     if(!token.name.empty()) pipeline.commands.push_back(token);
-    else{
+    else if(!pipeline.commands.empty()){
         cout<<"Error: No Command after pipe"<<endl;
         return;
     }
+    else return;
     if(pipeline.commands.empty()) return;
     commandSelector(token, pipeline);
     // cout<<token.size()<<endl;
 }
+
+
+void sigchldHandler(int signal){
+    childChanged = 1;
+}
+
+bool readInput(string &input) {
+    input.clear();
+    char ch;
+    while (true) {
+        ssize_t bytesRead = read(STDIN_FILENO, &ch, 1);
+        if(bytesRead == 1) {
+            if(ch=='\n') {
+                return true;
+            }
+            input+=ch;
+        }
+        else if(bytesRead == 0) {
+            return !input.empty();
+        }
+        else{
+            if(errno == EINTR){
+                reapChild();                // when no foreground process running and we are in read state
+                cout<<"my_shell>: "<<flush;
+                continue;
+            }
+            perror("read");
+            return false;
+        }
+    }
+    return false;
+}
 int main(int argc, char const *argv[])
 {
+    struct sigaction sa{};
+    sa.sa_handler = sigchldHandler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGCHLD,&sa, NULL);
     while(true){
-        cout<<"my_shell>: ";
+        reapChild();                  // this is for the case when there is some foreground process running
+        cout<<"my_shell>: "<<flush;
         string input;
-        getline(cin,input);
+        if (!readInput(input)) {
+            break;
+        }
         if(input =="q" || input=="exit") break;
         else{
             inputParser(input);
@@ -272,3 +336,6 @@ int main(int argc, char const *argv[])
     }
     return 0;
 }
+
+
+// use read instead of getline to fix this problem
