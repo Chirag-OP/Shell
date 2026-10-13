@@ -23,14 +23,15 @@ using namespace std;
 // };
 
 volatile sig_atomic_t childChanged = 0;
-
+pid_t shell_pgrp_id;
 void reapChild(){
     if(childChanged){
         childChanged = 0;
         int status;
         int pid;
         while((pid = waitpid(-1,&status,WNOHANG))>0){
-            cout<<"Child "<<pid<<' '<<"completed"<<endl;
+            cout<<"Child "<<pid<<' '<<"completed"<<flush;    // need to make changes here since real shell doesnt print completed message
+            cout<<endl<<flush;
         }
     }
 }
@@ -96,6 +97,7 @@ void removedir(Command &token){
 }
 
 void callOuterCommands( Pipeline &pipeline){
+    pid_t group_pgid = -1;
     int lastPipeRead = -1;
     vector<pid_t>chilren_pids;
     bool background = pipeline.background;
@@ -110,6 +112,9 @@ void callOuterCommands( Pipeline &pipeline){
         pid_t child = fork();
         if(child==0){
             // child proces
+            signal(SIGTTOU, SIG_DFL);
+            pid_t pgid = group_pgid==-1 ? getpid() : group_pgid;
+            if(setpgid(0,pgid)==-1) perror("setpgid: child");   // makes the child join a new process group
             if(i!=pipeline.commands.size()-1){
                 close(fd[0]);
                 if(lastPipeRead != -1){
@@ -164,6 +169,9 @@ void callOuterCommands( Pipeline &pipeline){
             exit(EXIT_FAILURE);
         }
         else if(child>0){
+            pid_t pgid = group_pgid==-1 ? child : group_pgid;
+            if(setpgid(child,pgid)==-1) perror("setpgid: parent");
+            group_pgid = pgid;
             chilren_pids.push_back(child);
             if(i!=pipeline.commands.size()-1){
                 close(fd[1]);   
@@ -172,7 +180,11 @@ void callOuterCommands( Pipeline &pipeline){
             }
             else{
                 if(lastPipeRead!=-1)close(lastPipeRead);
-                if(!background) for(auto &c:chilren_pids) waitpid(c,nullptr,0);
+                if(!background){
+                    tcsetpgrp(STDIN_FILENO,group_pgid);
+                    for(auto &c:chilren_pids) waitpid(c,nullptr,WUNTRACED);
+                    tcsetpgrp(STDIN_FILENO,shell_pgrp_id);
+                }
             }
         }
         else perror("fork");
@@ -318,10 +330,12 @@ bool readInput(string &input) {
 }
 int main(int argc, char const *argv[])
 {
+    signal(SIGTTOU, SIG_IGN);
     struct sigaction sa{};
     sa.sa_handler = sigchldHandler;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGCHLD,&sa, NULL);
+    shell_pgrp_id = getpgrp();
     while(true){
         reapChild();                  // this is for the case when there is some foreground process running
         cout<<"my_shell>: "<<flush;
@@ -337,5 +351,9 @@ int main(int argc, char const *argv[])
     return 0;
 }
 
+// add both these below to readme
+// current prob => waitpid of background runs for both background and foreground processes
+// sol => maintain a list of background processes to run it for only background
 
-// use read instead of getline to fix this problem
+// current prob => my_shell appears in same line as ^C
+// sol => make a flag set it when child is stopped and print new line when flag is set
